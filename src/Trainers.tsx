@@ -1,0 +1,68 @@
+import { useEffect, useRef, useState } from 'react';
+import * as Tabs from '@radix-ui/react-tabs';
+import { Check, Headphones, Play, RotateCcw, Save, Trash2 } from 'lucide-react';
+import { useSearchParams } from 'react-router-dom';
+import { Keyboard, MidiConnect, Staff } from './components';
+import { audioContext, chordNotes, musicXML, nameOf, noteNames, playNotes, sameChord, sound, timingAccuracy, whiteNotes } from './music';
+import { Button } from './ui';
+import type { Attempt, State } from './storage';
+import { download } from './storage';
+
+export type Update = (fn: (state: State) => State) => boolean;
+const kinds = [{ id: 'notes', label: 'Чтение нот' }, { id: 'rhythm', label: 'Ритм' }, { id: 'ear', label: 'Слух' }, { id: 'chords', label: 'Аккорды' }, { id: 'speed', label: 'Ровность' }, { id: 'writing', label: 'Запись нот' }];
+const random = <T,>(values: T[]): T => values[Math.floor(Math.random() * values.length)];
+const intervals = [{ semitones: 3, label: 'Малая терция' }, { semitones: 4, label: 'Большая терция' }, { semitones: 5, label: 'Чистая кварта' }, { semitones: 7, label: 'Чистая квинта' }, { semitones: 12, label: 'Октава' }];
+
+export function Trainers({ state, update }: { state: State; update: Update }) {
+  const [params, setParams] = useSearchParams(); const kind = kinds.some(k => k.id === params.get('mode')) ? params.get('mode')! : 'notes';
+  const [bass, setBass] = useState(false), [range, setRange] = useState('five'), [target, setTarget] = useState(64), [feedback, setFeedback] = useState(''), [answered, setAnswered] = useState(false), [session, setSession] = useState({ correct: 0, total: 0 });
+  const [interval, setInterval] = useState(intervals[1]), [root, setRoot] = useState(60), [minor, setMinor] = useState(false), [selected, setSelected] = useState<number[]>([]), [heard, setHeard] = useState(false);
+  const [taps, setTaps] = useState<number[]>([]), [rhythmDone, setRhythmDone] = useState(false), [sequence, setSequence] = useState<number[]>([]), [position, setPosition] = useState(0), [wrong, setWrong] = useState(0), [speedTimes, setSpeedTimes] = useState<number[]>([]);
+  const [duration, setDuration] = useState(1), [audioError, setAudioError] = useState('');
+  const timeout = useRef<ReturnType<typeof setTimeout> | undefined>(undefined), lock = useRef(false);
+  const record = (correct: number, total: number, bpm?: number) => {
+    const attempt: Attempt = { date: new Date().toISOString(), kind, correct, total, ...(bpm ? { bpm } : {}) };
+    update(s => ({ ...s, attempts: [...s.attempts.slice(-499), attempt] }));
+    setSession(s => ({ correct: s.correct + correct, total: s.total + total }));
+  };
+  function reset() { setFeedback(''); setAnswered(false); setSelected([]); setTaps([]); setRhythmDone(false); setSequence([]); setPosition(0); setWrong(0); setSpeedTimes([]); setHeard(false); lock.current = false; clearTimeout(timeout.current); }
+  useEffect(() => { reset(); setSession({ correct: 0, total: 0 }); return () => clearTimeout(timeout.current); }, [kind]);
+  function nextNote(nextBass = bass, nextRange = range) { const pool = (nextRange === 'three' ? whiteNotes.slice(0, 3) : nextRange === 'five' ? whiteNotes.slice(0, 5) : whiteNotes).map(n => n - (nextBass ? 12 : 0)); setTarget(random(pool.filter(n => n !== target))); setAnswered(false); setFeedback(''); }
+  async function safePlay(notes: { midi: number; beats: number }[], bpm = state.bpm) { try { await playNotes(notes, bpm); } catch { setAudioError('Не удалось включить звук. Проверьте настройки браузера.'); } }
+  function grade(ok: boolean, message: string) { if (lock.current) return; lock.current = true; setAnswered(true); setFeedback(message); record(ok ? 1 : 0, 1); }
+  function noteInput(n: number) {
+    void audioContext().then(ctx => sound(ctx, n)).catch(() => setAudioError('Звук недоступен.'));
+    if (kind === 'notes' && !answered) grade(n === target, n === target ? `Верно, это ${nameOf(target)}.` : `Это ${nameOf(n)}. В записи — ${nameOf(target)}. Сравните их положение.`);
+    if (kind === 'chords' && !answered) setSelected(s => s.includes(n) ? s.filter(v => v !== n) : [...s, n]);
+    if (kind === 'speed') speedInput(n);
+  }
+  function tap() {
+    if (rhythmDone) return;
+    const next = [...taps, performance.now()]; setTaps(next);
+    if (next.length === 9) { const result = timingAccuracy(next, state.bpm); setRhythmDone(true); setFeedback(`Среднее отклонение от сетки: ${result.error} мс. В допуске: ${result.correct} из ${result.total}. Первый удар задаёт начало сетки.`); record(result.correct, result.total, state.bpm); }
+  }
+  function speedInput(n: number) {
+    if (!sequence.length || position >= sequence.length || lock.current) return;
+    if (n !== sequence[position]) { setWrong(w => w + 1); setFeedback(`Нужна ${nameOf(sequence[position])}. Попробуйте ещё раз.`); return; }
+    const times = [...speedTimes, performance.now()]; setSpeedTimes(times); setPosition(p => p + 1); setFeedback('');
+    if (position === sequence.length - 1) { lock.current = true; const result = timingAccuracy(times, state.bpm); const total = sequence.length + wrong; record(sequence.length, total, state.bpm); setFeedback(`Фрагмент завершён. Точность нот: ${Math.round(sequence.length / total * 100)}%. Отклонение от сетки ${state.bpm} BPM: ${result.error} мс; ${result.correct}/${result.total} интервалов в допуске. Начало сетки — первая нота.`); }
+  }
+  function newTask() { reset(); if (kind === 'notes') nextNote(); if (kind === 'ear') { setRoot(random([60,62,65,67])); setInterval(random(intervals)); } if (kind === 'chords') { setRoot(random([60,62,64,65,67,69])); setMinor(Math.random() < 0.5); } }
+  function addDraft(midi: number) { if (state.draft.length >= 32) { setFeedback('Максимум 32 ноты. Сохраните упражнение и начните новое.'); return; } update(s => ({ ...s, draft: [...s.draft, { midi, beats: duration }] })); }
+  return <>
+    <div className="page-heading"><div><div className="eyebrow">МАЛЕНЬКИЕ ШАГИ, ЗАМЕТНЫЙ РЕЗУЛЬТАТ</div><h1>Ваша практика</h1><p>Выберите навык и уделите ему несколько спокойных минут.</p></div><div className="session-badge"><Check size={18} />{session.correct} / {session.total} за сессию</div></div>
+    <Tabs.Root value={kind} onValueChange={v => setParams({ mode: v })}><Tabs.List className="trainer-tabs" aria-label="Тренажёры">{kinds.map(k => <Tabs.Trigger key={k.id} value={k.id}>{k.label}</Tabs.Trigger>)}</Tabs.List>
+      <div className="trainer-layout"><section className="card trainer-card">
+        {kind === 'notes' && <><div className="row spread"><div><span className="tag lavender">НОТНАЯ ГРАМОТА</span><h2>Какая нота записана?</h2></div><div className="row"><label className="compact-label">Ключ<select value={bass ? 'bass' : 'treble'} onChange={e => { const b = e.target.value === 'bass'; setBass(b); lock.current = false; nextNote(b); }}><option value="treble">Скрипичный</option><option value="bass">Басовый</option></select></label><label className="compact-label">Диапазон<select value={range} onChange={e => { setRange(e.target.value); lock.current = false; nextNote(bass, e.target.value); }}><option value="three">До–ми</option><option value="five">До–соль</option><option value="octave">Октава</option></select></label></div></div><Staff notes={[target]} bass={bass} /><p className="center muted">Нажмите клавишу на экране или на подключённом пианино.</p><Keyboard from={bass ? 48 : 60} onNote={noteInput} selected={answered ? [target] : []} /></>}
+        {kind === 'ear' && <><span className="tag peach">МУЗЫКАЛЬНЫЙ СЛУХ</span><h2>Какой интервал звучит?</h2><p className="muted">Два звука последовательно. Услышьте расстояние между ними.</p><div className="listen-area"><Headphones size={52} /><Button onClick={() => { setHeard(true); void safePlay([{ midi: root, beats: 1 }, { midi: root + interval.semitones, beats: 1 }], 85); }}><Play size={17} />{heard ? 'Послушать ещё раз' : 'Послушать'}</Button></div><div className="answer-grid">{intervals.map(i => <Button key={i.semitones} variant="secondary" disabled={!heard || answered} onClick={() => grade(i.semitones === interval.semitones, i.semitones === interval.semitones ? `Верно: ${interval.label.toLowerCase()}, ${interval.semitones} полутонов.` : `Звучала ${interval.label.toLowerCase()}: ${interval.semitones} полутонов. Послушайте ещё раз.`)}>{i.label}</Button>)}</div></>}
+        {kind === 'chords' && <><span className="tag mint">ГАРМОНИЯ</span><h2>Постройте {noteNames[root % 12]} {minor ? 'минор' : 'мажор'}</h2><p className="muted">Выберите три ноты трезвучия. Повторное нажатие убирает ноту.</p><div className="chord-selection">{selected.length ? selected.map(n => <span className="note-chip" key={n}>{nameOf(n)}</span>) : <span className="muted">Основной тон + терция + квинта</span>}</div><Keyboard selected={selected} onNote={noteInput} /><div className="row"><Button disabled={answered || selected.length !== 3} onClick={() => { const target = chordNotes(root, minor), ok = sameChord(selected, target); grade(ok, ok ? 'Верно! Прослушайте аккорд и запомните его звучание.' : `Состав по классам высоты: ${target.map(n => noteNames[n]).join(' · ')}. Формула: ${minor ? '3 + 4' : '4 + 3'} полутона. В записи минорная терция может называться через бемоль.`); }}>Проверить</Button><Button variant="ghost" onClick={() => { setSelected([]); }}>Снять выбор</Button></div></>}
+        {kind === 'rhythm' && <><span className="tag peach">ЧУВСТВО ВРЕМЕНИ</span><h2>Держите ровный пульс</h2><p className="muted">Включите метроном справа. Нажмите девять раз: первый удар задаёт начало, следующие восемь проверяются относительно него.</p><button className={`tap-pad ${rhythmDone ? 'finished' : ''}`} disabled={rhythmDone} onClick={tap}><span>{rhythmDone ? <Check size={40} /> : <span className="tap-ring" />}</span><strong>{rhythmDone ? 'Готово' : 'Нажимайте в пульс'}</strong><span>{taps.length} / 9 нажатий · {state.bpm} BPM</span></button><p className="muted small">Допуск: 15% доли, максимум 120 мс. Это учебный ориентир, а не оценка музыкальности.</p><Button variant="secondary" onClick={reset}><RotateCcw size={16} />Начать заново</Button></>}
+        {kind === 'speed' && <><span className="tag lavender">ТОЧНОСТЬ ПЕРЕД СКОРОСТЬЮ</span><h2>Восемь ровных нот</h2><p className="muted">Одна нота на удар метронома. Сначала найдите удобный темп, затем сыграйте C–D–E–F–G–F–E–D.</p><Staff notes={sequence.length ? sequence : [60,62,64,65,67,65,64,62]} active={position} /><Button variant="secondary" onClick={() => { reset(); setSequence([60,62,64,65,67,65,64,62]); }}><Play size={16} />{sequence.length ? 'Начать заново' : 'Начать упражнение'}</Button><p className="muted">{sequence.length ? `${Math.min(position, 8)} / 8 нот · ошибок: ${wrong}` : 'Нажмите «Начать», затем играйте на клавиатуре.'}</p><Keyboard onNote={noteInput} selected={sequence.length && position < 8 ? [sequence[position]] : []} /></>}
+        {kind === 'writing' && <><span className="tag mint">СВОЯ НОТНАЯ ЗАПИСЬ</span><h2>Запишите маленькую мелодию</h2><p className="muted">Выберите длительность и добавляйте ноты кнопками или нажатием на стан. Это свободный эскиз без тактового размера, до 32 нот.</p><label className="compact-label">Длительность<select value={duration} onChange={e => setDuration(Number(e.target.value))}><option value="0.5">Восьмая · ½ доли</option><option value="1">Четверть · 1 доля</option><option value="2">Половинная · 2 доли</option><option value="4">Целая · 4 доли</option></select></label><Staff notes={state.draft.map(n => n.midi)} beats={state.draft.map(n => n.beats)} onPick={addDraft} /><Keyboard onNote={addDraft} /><div className="row wrap"><Button variant="secondary" disabled={!state.draft.length} onClick={() => void safePlay(state.draft)}><Play size={16} />Прослушать</Button><Button variant="secondary" disabled={!state.draft.length} onClick={() => update(s => ({ ...s, draft: s.draft.slice(0, -1) }))}><RotateCcw size={16} />Убрать последнюю</Button><Button variant="ghost" disabled={!state.draft.length} onClick={() => update(s => ({ ...s, draft: [] }))}><Trash2 size={16} />Очистить</Button><Button disabled={!state.draft.length} onClick={() => { const xml = musicXML(state.draft); const ok = update(s => ({ ...s, scores: [...s.scores, { id: crypto.randomUUID(), title: `Моё упражнение ${s.scores.length + 1}`, author: 'Моя запись', status: 'Разбираю', notes: '', type: 'xml', fileName: 'exercise.musicxml', data: xml }] })); if (ok) setFeedback('Упражнение сохранено в «Мои ноты».'); }}><Save size={16} />В библиотеку</Button><Button variant="ghost" disabled={!state.draft.length} onClick={() => download('exercise.musicxml', musicXML(state.draft), 'application/vnd.recordare.musicxml+xml')}>Скачать MusicXML</Button></div></>}
+        {feedback && <div className="feedback" role="status">{feedback}</div>}{audioError && <p className="error" role="alert">{audioError}</p>}
+        {answered && <Button className="next-task" onClick={newTask}>Следующее задание</Button>}
+        {['notes','chords','speed'].includes(kind) && <MidiConnect onNote={noteInput} />}
+      </section><aside className="practice-aside"><div className="card advice"><span className="eyebrow">КАК ЗАНИМАТЬСЯ</span><h3>Спокойно и регулярно</h3><p>Пять внимательных минут полезнее спешки. После ошибки разберите причину и повторите небольшой фрагмент.</p><div className="aside-divider" /><p>Результаты завершённых заданий сохраняются автоматически. Смена раздела начинает новую сессию.</p></div><div className="soft-card"><h3>Следите за свободой рук</h3><p>Экран проверяет ответ, но удобство движений оцениваете вы. Делайте короткие паузы.</p></div></aside></div>
+    </Tabs.Root>
+  </>;
+}
