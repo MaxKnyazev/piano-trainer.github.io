@@ -1,12 +1,22 @@
-export type Exercise = { level: string; title: string; steps: string[]; goal: string };
+import { enrichChapter } from './course-expansion';
+
+export type Exercise = { level: string; title: string; steps: string[]; goal: string; purpose?: string; easier?: string };
+export type ChapterGuide = {
+  introduction: string;
+  sections: { title: string; paragraphs: string[] }[];
+  example: { title: string; steps: string[]; explanation: string };
+  mistakes: { problem: string; solution: string }[];
+  questions: { question: string; answer: string }[];
+  practicePlan: string;
+};
 export type Chapter = {
   id: string; title: string; subtitle: string; category: string; minutes: number;
-  theory: string[]; exercises: Exercise[]; tip: string; trainer: string;
+  theory: string[]; exercises: Exercise[]; tip: string; trainer: string; guide?: ChapterGuide;
 };
 
 const exercise = (level: string, title: string, steps: string[], goal: string): Exercise => ({ level, title, steps, goal });
 
-export const chapters: Chapter[] = [
+const introductoryChapters: Chapter[] = [
   {
     id: 'keyboard', title: 'Знакомство с клавиатурой', subtitle: 'Найдите первую ноту — и начните играть', category: 'Первые шаги', minutes: 12,
     theory: [
@@ -108,4 +118,5 @@ export const chapters: Chapter[] = [
   },
 ];
 
+export const chapters: Chapter[] = introductoryChapters.map(enrichChapter);
 export const totalExercises = chapters.reduce((sum, chapter) => sum + chapter.exercises.length, 0);

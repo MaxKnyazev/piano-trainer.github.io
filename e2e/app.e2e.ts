@@ -133,3 +133,40 @@ test('ear and speed trainers finish and store results', async ({ page }) => {
   expect(attempts.map((a: { kind: string }) => a.kind)).toEqual(['ear', 'speed']);
   expect(attempts[1].correct).toBe(8);
 });
+
+test('expanded chapter keeps old completions and marks filtered exercises by their original index', async ({ page }) => {
+  await page.addInitScript(() => {
+    localStorage.setItem('takt-piano:v1', JSON.stringify({ version: 1, completed: ['keyboard:0','keyboard:1','keyboard:2'], attempts: [], scores: [], draft: [], bpm: 60, dailyMinutes: 30 }));
+  });
+  await page.goto('/#/course');
+  await expect(page.getByText('18 глав с подробными объяснениями · 108 упражнений', { exact: true })).toBeVisible();
+  const firstChapter = page.locator('.chapter-row').first();
+  await expect(firstChapter).toContainText('3/6 упражнений');
+  await expect(firstChapter).not.toHaveClass(/chapter-done/);
+  await firstChapter.click();
+  await page.screenshot({ path: 'test-results/lesson-desktop.png' });
+  await expect(page.getByText('Выполнено', { exact: true })).toHaveCount(3);
+  await page.getByLabel('Выберите сложность').selectOption('Базовый');
+  await expect(page.locator('.exercise')).toHaveCount(2);
+  await page.getByRole('button', { name: 'Я выполнил упражнение', exact: true }).click();
+  expect(await page.evaluate(() => JSON.parse(localStorage.getItem('takt-piano:v1')!).completed)).toEqual(['keyboard:0','keyboard:1','keyboard:2','keyboard:3']);
+  await page.getByLabel('Выберите сложность').selectOption('Все упражнения');
+  await expect(page.locator('.exercise')).toHaveCount(6);
+  await page.getByRole('button', { name: 'Самопроверка', exact: true }).first().click();
+  await page.getByText('Как найти фа, если до пока не видно?', { exact: true }).click();
+  await expect(page.getByText('Найдите группу из трёх чёрных клавиш. Белая непосредственно слева от неё — фа.', { exact: true })).toBeVisible();
+});
+
+test('long lesson is readable on mobile and its practice navigation works', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto('/#/course/triads');
+  await page.screenshot({ path: 'test-results/lesson-mobile-top.png' });
+  await expect(page.getByRole('heading', { name: 'Мажор и минор: меняется середина' })).toBeVisible();
+  await page.getByRole('button', { name: 'Упражнения', exact: true }).first().click();
+  await expect(page.getByRole('heading', { name: 'Теперь — за инструмент' })).toBeInViewport();
+  await page.getByLabel('Выберите сложность').selectOption('Усложнение');
+  await page.getByText('Если пока трудно', { exact: true }).click();
+  await expect(page.getByText('Сначала постройте только ре мажор и ре минор.', { exact: true })).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await page.screenshot({ path: 'test-results/lesson-mobile.png', fullPage: true });
+});
