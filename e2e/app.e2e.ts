@@ -62,7 +62,7 @@ test('library supports PDF upload and confirmed deletion', async ({ page }) => {
   await expect(page.locator('object[type="application/pdf"]')).toHaveCount(1);
   await page.getByRole('button', { name: 'Удалить', exact: true }).click();
   await page.getByRole('button', { name: 'Удалить произведение', exact: true }).click();
-  await expect(page.getByRole('heading', { name: 'Ваш репертуар начинается здесь' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Здесь появятся ваши произведения' })).toBeVisible();
 });
 
 test('backup import requires confirmation and rejects invalid data', async ({ page }) => {
@@ -169,4 +169,40 @@ test('long lesson is readable on mobile and its practice navigation works', asyn
   await expect(page.getByText('Сначала постройте только ре мажор и ре минор.', { exact: true })).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   await page.screenshot({ path: 'test-results/lesson-mobile.png', fullPage: true });
+});
+
+test('Minecraft catalog has two editions, honest publisher links and local file attachments', async ({ page }) => {
+  await page.goto('/#/library');
+  await expect(page.locator('.score-card')).toHaveCount(16);
+  await page.getByRole('combobox', { name: 'Сложность', exact: true }).selectOption('easy');
+  await expect(page.locator('.score-card')).toHaveCount(8);
+  await page.getByLabel('Поиск произведений').fill('Sweden');
+  await expect(page.locator('.score-card')).toHaveCount(1);
+  await page.locator('.score-card').click();
+  await expect(page.getByRole('link', { name: 'Открыть сборник у издателя' })).toHaveAttribute('href', 'https://www.halleonard.com/product/369016/music-from-minecraft');
+  await expect(page.locator('.source-access')).toContainText('без скачивания PDF');
+  await page.getByLabel('Прикрепить нотный файл').setInputFiles({ name: 'my-sweden.pdf', mimeType: 'application/pdf', buffer: Buffer.from('%PDF-1.4\n%%EOF') });
+  await expect(page.locator('object[type="application/pdf"]')).toHaveCount(1);
+  await page.getByLabel('Заметки и задача на следующее занятие').fill('My practice notes');
+  await page.getByRole('button', { name: 'Закрыть', exact: true }).click();
+  await page.reload();
+  await page.getByLabel('Поиск произведений').fill('Sweden');
+  await expect(page.locator('.score-card')).toHaveCount(2);
+  await page.getByRole('combobox', { name: 'Сложность', exact: true }).selectOption('easy');
+  await page.locator('.score-card').click();
+  await expect(page.getByLabel('Заметки и задача на следующее занятие')).toHaveValue('My practice notes');
+  await expect(page.locator('object[type="application/pdf"]')).toHaveCount(1);
+  await page.getByRole('button', { name: 'Удалить', exact: true }).click();
+  await page.getByRole('button', { name: 'Удалить произведение', exact: true }).click();
+  await page.reload();
+  await expect(page.locator('.score-card')).toHaveCount(15);
+});
+
+test('Minecraft library is usable on a phone', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto('/#/library');
+  await page.getByRole('combobox', { name: 'Сложность', exact: true }).selectOption('advanced');
+  await expect(page.locator('.score-card')).toHaveCount(8);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await page.screenshot({ path: 'test-results/minecraft-mobile.png' });
 });
